@@ -1,0 +1,1 @@
+MONGODB_URL=mongodb+srv://satdhamerp:KVC2suY7HbTMVb4a@cluster0.pxi7bk2.mongodb.net/satSabha?retryWrites=true&w=majority
