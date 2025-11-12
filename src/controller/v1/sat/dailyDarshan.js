@@ -2,24 +2,21 @@
 const DailyDarshan = require("../../../models/sat/dailyDarshanUpload")
 
 const multer = require("multer")
+const { getBucket } = require("../../../config/firebase_bucket");
 
-// S3
-const { S3Client, PutObjectCommand, DeleteObjectCommand } = require('@aws-sdk/client-s3')
-
-
-
-const bucket_name = process.env.BUCKET_NAME
-const bucket_region = process.env.BUCKET_REGION
-const access_key = process.env.ACCESS_KEY
-const secret_key = process.env.SECRET_KEY
-
-const s3 = new S3Client({
-    credentials: {
-        accessKeyId: access_key,
-        secretAccessKey: secret_key
-    },
-    region: bucket_region
-})
+// S3 legacy reference (kept for future use)
+// const { S3Client, PutObjectCommand, DeleteObjectCommand } = require('@aws-sdk/client-s3')
+// const bucket_name = process.env.BUCKET_NAME
+// const bucket_region = process.env.BUCKET_REGION
+// const access_key = process.env.ACCESS_KEY
+// const secret_key = process.env.SECRET_KEY
+// const s3 = new S3Client({
+//     credentials: {
+//         accessKeyId: access_key,
+//         secretAccessKey: secret_key
+//     },
+//     region: bucket_region
+// })
 
 
 var upload = multer({
@@ -49,6 +46,8 @@ const postUpload = async (req, res, next) => {
                 res.status(401).json({ message: "Opps! Somthing went wrong.", result: "something went wrong on file" })
             } else {
 
+                const bucket = await getBucket();
+
                 let responseCount = 0
                 let errorCount = 0
                 const numberOfFiles = req.files?.length
@@ -66,14 +65,21 @@ const postUpload = async (req, res, next) => {
                     try {
                         const ress = await newFile.save();
                         if (ress) {
-                            const params = {
-                                Bucket: bucket_name,
-                                Key: `dd/${ress.fileName}`,
-                                Body: data.buffer,
-                                ContentType: data.mimetype
-                            };
-                            const command = new PutObjectCommand(params);
-                            await s3.send(command);
+                            const fileUpload = bucket.file(`dd/${ress.fileName}`);
+                            await fileUpload.save(data.buffer, {
+                                metadata: { contentType: data.mimetype },
+                                public: true,
+                                resumable: false,
+                            });
+                            // Legacy AWS S3 implementation (kept for reference)
+                            // const params = {
+                            //     Bucket: bucket_name,
+                            //     Key: `dd/${ress.fileName}`,
+                            //     Body: data.buffer,
+                            //     ContentType: data.mimetype
+                            // };
+                            // const command = new PutObjectCommand(params);
+                            // await s3.send(command);
                             responseCount = responseCount + 1;
                         } else {
                             errorCount = errorCount + 1;
@@ -122,57 +128,73 @@ const updateUpload = async (req, res, next) => {
 
     try {
         await upload(req, res, async function (err) {
-            // if (req.file.size < 1000000) {
-            console.log(req?.files, "Req Files");
+            const files = req.files || [];
+            console.log(files, "Req Files");
             console.log(err, "Err files");
-            if (err || req.files.length > 1) {
+            if (err || files.length > 1) {
                 res.status(401).json({ message: "Opps! Somthing went wrong.", result: "something went wrong on file or File is more than 1" })
             } else {
-                const parms = {
-                    Bucket: bucket_name,
-                    Key: `dd/${req.body.fileName}`,
+                const bucket = await getBucket();
+
+                try {
+                    const oldFile = bucket.file(`dd/${req.body.fileName}`);
+                    await oldFile.delete().catch(deleteErr => {
+                        if (deleteErr.code !== 404) {
+                            throw deleteErr;
+                        }
+                    });
+                    // Legacy AWS S3 implementation (kept for reference)
+                    // const parms = {
+                    //     Bucket: bucket_name,
+                    //     Key: `dd/${req.body.fileName}`,
+                    // }
+                    // const command = new DeleteObjectCommand(parms)
+                    // await s3.send(command)
+                } catch (deleteErr) {
+                    console.error("Error deleting old file:", deleteErr);
                 }
-                const command = new DeleteObjectCommand(parms)
-                await s3.send(command)
-                    .then(async (ress1) => {
-                        let responseCount = 0
-                        let errorCount = 0
-                        const numberOfFiles = req.files?.length
 
-                        await Promise.all(req.files?.map(async data => {
-                            console.log(data, "Inside map");
-                            try {
-                                await DailyDarshan.updateOne(
-                                    { _id: String(req.body._id) },
-                                    { $set: { fileName: `DD_${Date.now()}_${Math.random().toString(36).substring(7)}.png`, location: String(req.body.location) } }
-                                )
-                                if (DailyDarshan) {
-                                    const ress = await DailyDarshan.findOne({ _id: String(req.body._id) })
-                                    if (ress) {
-                                        console.log(ress, "DB Res");
-                                        const params1 = {
-                                            Bucket: bucket_name,
-                                            Key: `dd/${ress.fileName}`,
-                                            Body: data.buffer,
-                                            ContentType: data.mimetype
-                                        };
-                                        const command1 = new PutObjectCommand(params1);
-                                        await s3.send(command1);
-                                        responseCount = responseCount + 1;
-                                    } else {
-                                        errorCount = errorCount + 1;
-                                    }
-                                }
-                            } catch (err) {
-                                console.log(err, "Err ");
-                                errorCount = errorCount + 1;
-                            }
-                        }));
+                let responseCount = 0
+                let errorCount = 0
+                const numberOfFiles = files.length
 
-                        // Send response
-                        res.status(200).json({ responseCount, errorCount, numberOfFiles });
+                await Promise.all(files.map(async data => {
+                    console.log(data, "Inside map");
+                    try {
+                        await DailyDarshan.updateOne(
+                            { _id: String(req.body._id) },
+                            { $set: { fileName: `DD_${Date.now()}_${Math.random().toString(36).substring(7)}.png`, location: String(req.body.location) } }
+                        )
+                        const ress = await DailyDarshan.findOne({ _id: String(req.body._id) })
+                        if (!ress) {
+                            errorCount = errorCount + 1;
+                            return;
+                        }
 
-                    })
+                        const fileUpload = bucket.file(`dd/${ress.fileName}`);
+                        await fileUpload.save(data.buffer, {
+                            metadata: { contentType: data.mimetype },
+                            public: true,
+                            resumable: false,
+                        });
+                        // Legacy AWS S3 implementation (kept for reference)
+                        // const params1 = {
+                        //     Bucket: bucket_name,
+                        //     Key: `dd/${ress.fileName}`,
+                        //     Body: data.buffer,
+                        //     ContentType: data.mimetype
+                        // };
+                        // const command1 = new PutObjectCommand(params1);
+                        // await s3.send(command1);
+                        responseCount = responseCount + 1;
+                    } catch (err) {
+                        console.log(err, "Err ");
+                        errorCount = errorCount + 1;
+                    }
+                }));
+
+                res.status(200).json({ responseCount, errorCount, numberOfFiles });
+
             }
         })
     } catch (err) {
@@ -188,26 +210,29 @@ const updateUpload = async (req, res, next) => {
 // Delete
 const deleteUpload = async (req, res, next) => {
     try {
-        const parms = {
-            Bucket: bucket_name,
-            Key: `dd/${req.body.fileName}`,
-        }
-        const command = new DeleteObjectCommand(parms)
-        await s3.send(command)
-            .then(async (ress1) => {
-                DailyDarshan.deleteOne({ _id: String(req.body._id) })
-                    .then((result) => {
-                        res.status(200).json({
-                            message: "Deleted!",
-                            err: result
-                        })
-                    })
-                    .catch(err => {
-                        res.status(301).json({
-                            message: "Error on delete file!",
-                            err: err
-                        })
-                    })
+        const bucket = await getBucket();
+        const filePath = `dd/${req.body.fileName}`;
+        const file = bucket.file(filePath);
+
+        await file.delete().catch(err => {
+            if (err.code !== 404) {
+                throw err;
+            }
+        });
+        // Legacy AWS S3 implementation (kept for reference)
+        // const parms = {
+        //     Bucket: bucket_name,
+        //     Key: `dd/${req.body.fileName}`,
+        // }
+        // const command = new DeleteObjectCommand(parms)
+        // await s3.send(command)
+
+        DailyDarshan.deleteOne({ _id: String(req.body._id) })
+            .then((result) => {
+                res.status(200).json({
+                    message: "Deleted!",
+                    err: result
+                })
             })
             .catch(err => {
                 res.status(301).json({

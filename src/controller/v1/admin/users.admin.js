@@ -3,27 +3,24 @@ const Users = require('../../../models/user/user.model')
 const Atdetails = require('../../../models/attendance/atdetails')
 const multer = require("multer")
 const bcrypt = require('bcrypt')
+const { getBucket } = require("../../../config/firebase_bucket");
 
-
-
-
-// S3
-const { S3Client, PutObjectCommand, DeleteObjectCommand } = require('@aws-sdk/client-s3')
+// S3 legacy reference (kept for future use)
+// const { S3Client, PutObjectCommand, DeleteObjectCommand } = require('@aws-sdk/client-s3')
 const { get_each_user_joi, update_active_user_status } = require('../../../joi/users/user.joi')
 const { updateUserZone_joi } = require('../../../joi/users/updateZone.joi')
 
-const bucket_name = process.env.BUCKET_NAME
-const bucket_region = process.env.BUCKET_REGION
-const access_key = process.env.ACCESS_KEY
-const secret_key = process.env.SECRET_KEY
-
-const s3 = new S3Client({
-    credentials: {
-        accessKeyId: access_key,
-        secretAccessKey: secret_key
-    },
-    region: bucket_region
-})
+// const bucket_name = process.env.BUCKET_NAME
+// const bucket_region = process.env.BUCKET_REGION
+// const access_key = process.env.ACCESS_KEY
+// const secret_key = process.env.SECRET_KEY
+// const s3 = new S3Client({
+//     credentials: {
+//         accessKeyId: access_key,
+//         secretAccessKey: secret_key
+//     },
+//     region: bucket_region
+// })
 
 
 var upload = multer({
@@ -79,37 +76,41 @@ const addUser = async (req, res, next) => {
                         profilePhotoStatus: true,
                         isActive: true
                     })
-                    await new_user.save()
-                        .then((ress) => {
-                            // const filename = req.file.
-                            if (ress) {
-                                const parms = {
-                                    Bucket: bucket_name,
-                                    Key: `${ress.ID}.png`,
-                                    Body: req.file.buffer,
-                                    ContentType: req.file.mimetype
-                                }
-                                const command = new PutObjectCommand(parms)
-                                s3.send(command)
-                                    .then((ress1) => {
-                                        res.status(200).json({
-                                            message: "Zone created successfully 😊",
-                                            result: ress
-                                        })
-                                    })
-                                    .catch(err => {
+                    try {
+                        const ress = await new_user.save();
+                        if (!ress) {
+                            return res.status(401).json({ message: "Opps! Somthing went wrong.", result: "something went wrong on save" });
+                        }
 
-                                        res.status(401).json({ message: "Opps! Somthing went wrong.", result: "something went wrong on save img" })
-                                    })
-                            } else {
-                                res.status(401).json({ message: "Opps! Somthing went wrong.", result: "something went wrong on save" })
-                            }
-
-                        })
-                        .catch(err => {
-                            // console.log(err);
-                            res.status(401).json({ message: "Opps! Somthing went wrong.", result: "something went wrong on save" })
-                        })
+                        try {
+                            const bucket = await getBucket();
+                            const fileUpload = bucket.file(`${ress.ID}.png`);
+                            await fileUpload.save(req.file.buffer, {
+                                metadata: { contentType: req.file.mimetype },
+                                public: true,
+                                resumable: false,
+                            });
+                            // Legacy AWS S3 implementation (kept for reference)
+                            // const parms = {
+                            //     Bucket: bucket_name,
+                            //     Key: `${ress.ID}.png`,
+                            //     Body: req.file.buffer,
+                            //     ContentType: req.file.mimetype
+                            // }
+                            // const command = new PutObjectCommand(parms)
+                            // await s3.send(command)
+                            return res.status(200).json({
+                                message: "Zone created successfully 😊",
+                                result: ress
+                            });
+                        } catch (uploadErr) {
+                            console.error(uploadErr);
+                            return res.status(401).json({ message: "Opps! Somthing went wrong.", result: "something went wrong on save img" });
+                        }
+                    } catch (saveErr) {
+                        console.error(saveErr);
+                        return res.status(401).json({ message: "Opps! Somthing went wrong.", result: "something went wrong on save" });
+                    }
                 } else {
                     res.status(401).json({ message: "Opps! Somthing went wrong.", result: "something went wrong on file" })
                 }
@@ -143,17 +144,15 @@ const addUser = async (req, res, next) => {
                     profilePhotoStatus: json.imgStatus,
                     isActive: true
                 })
-                await new_user.save()
-                    .then((ress) => {
-                        res.status(200).json({
-                            message: "Zone created successfully 😊",
-                            result: ress
-                        })
-
+                try {
+                    const ress = await new_user.save()
+                    res.status(200).json({
+                        message: "Zone created successfully 😊",
+                        result: ress
                     })
-                    .catch(err => {
-                        res.status(401).json({ message: "Opps! Somthing went wrong.", result: "something went wrong on data save without img" })
-                    })
+                } catch (err) {
+                    res.status(401).json({ message: "Opps! Somthing went wrong.", result: "something went wrong on data save without img" })
+                }
             }
 
         }
@@ -269,61 +268,69 @@ const updateEachUser = async (req, res, next) => {
                     break;
                 case 'updateWithProfile':
                     // Update datd
-                    await Users.updateOne({ ID: json.ID }, {
-                        $set: {
-                            firstname: json.firstname,
-                            middlename: json.middlename,
-                            lastname: json.lastname,
-                            gender: json.gender,
-                            district: json.district,
-                            taluka: json.taluka,
-                            village: json.village,
-                            mobile: json.mobile,
-                            address: json.address,
-                            zone: json.zone,
-                            vistar: json.vistar,
-                            subzone: json.subzone,
-                            profilePhotoStatus: true
-                        }
-                    })
-                        .then((ress) => {
-                            // Delete Old image
-                            const parms = {
-                                Bucket: bucket_name,
-                                Key: json.profileurl,
+                    try {
+                        const ress = await Users.updateOne({ ID: json.ID }, {
+                            $set: {
+                                firstname: json.firstname,
+                                middlename: json.middlename,
+                                lastname: json.lastname,
+                                gender: json.gender,
+                                district: json.district,
+                                taluka: json.taluka,
+                                village: json.village,
+                                mobile: json.mobile,
+                                address: json.address,
+                                zone: json.zone,
+                                vistar: json.vistar,
+                                subzone: json.subzone,
+                                profilePhotoStatus: true
                             }
-                            const command = new DeleteObjectCommand(parms)
-                            s3.send(command)
-                                .then((ress1) => {
-                                    // Add new Image
-                                    const parms1 = {
-                                        Bucket: bucket_name,
-                                        Key: json.profileurl,
-                                        Body: req.file.buffer,
-                                        ContentType: req.file.mimetype
-                                    }
-                                    const command1 = new PutObjectCommand(parms1)
-                                    s3.send(command1)
-                                        .then((ress1) => {
-                                            res.status(200).json({
-                                                message: "User Updated successfully 😊",
-                                                result: ress
-                                            })
-                                        })
-                                        .catch(err => {
-                                            console.log(err);
-                                            res.status(401).json({ message: "Opps! Somthing went wrong.", result: "something went wrong on save img" })
-                                        })
-                                })
-                                .catch(err => {
-                                    console.log(err);
-                                    res.status(401).json({ message: "Opps! Somthing went wrong.", result: "something went wrong on save img" })
-                                })
                         })
-                        .catch(err => {
-                            console.log(err);
-                            res.status(401).json({ message: "Opps! Somthing went wrong.", result: "something went wrong on get" })
-                        })
+
+                        try {
+                            const bucket = await getBucket();
+                            const fileRef = bucket.file(json.profileurl);
+                            await fileRef.delete().catch((deleteErr) => {
+                                if (deleteErr.code !== 404) {
+                                    throw deleteErr;
+                                }
+                            });
+                            // Legacy S3 implementation (kept for reference)
+                            // const parms = {
+                            //     Bucket: bucket_name,
+                            //     Key: json.profileurl,
+                            // }
+                            // const command = new DeleteObjectCommand(parms)
+                            // await s3.send(command)
+
+                            const newFileRef = bucket.file(json.profileurl);
+                            await newFileRef.save(req.file.buffer, {
+                                metadata: { contentType: req.file.mimetype },
+                                public: true,
+                                resumable: false,
+                            });
+                            // Legacy S3 implementation (kept for reference)
+                            // const parms1 = {
+                            //     Bucket: bucket_name,
+                            //     Key: json.profileurl,
+                            //     Body: req.file.buffer,
+                            //     ContentType: req.file.mimetype
+                            // }
+                            // const command1 = new PutObjectCommand(parms1)
+                            // await s3.send(command1)
+
+                            res.status(200).json({
+                                message: "User Updated successfully 😊",
+                                result: ress
+                            })
+                        } catch (uploadErr) {
+                            console.log(uploadErr);
+                            res.status(401).json({ message: "Opps! Somthing went wrong.", result: "something went wrong on save img" })
+                        }
+                    } catch (err) {
+                        console.log(err);
+                        res.status(401).json({ message: "Opps! Somthing went wrong.", result: "something went wrong on get" })
+                    }
                     break;
                 default:
                     break;

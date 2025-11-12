@@ -24,14 +24,17 @@ const adminLogin = async (req, res, next) => {
                 massage: "Validation fails to match the required pattern!"
             })
         }
+
         await Admin.findOne({ adminid: value.adminid })
             .then((result) => {
+
                 // console.log(result);
                 if (!result || result.isActive !== true) {
                     return res.status(301).json({
                         message: "Invalid authentication.",
                     })
                 }
+                console.log(value.password, result.password, "checkPasswordStatus");
                 const checkPasswordStatus = bcrypt.compareSync(value.password, result.password)
                 // Check password is mactch or not
                 if (checkPasswordStatus !== true) {
@@ -185,8 +188,43 @@ const userLogin = async (req, res, next) => {
 
 }
 
+const addAdmin = async (req, res, next) => {
+    try {
+        const body = req.body
+        const saltRounds = 12
+        const salt = bcrypt.genSaltSync(saltRounds);
+        const hash = bcrypt.hashSync(String(body.password), salt);
+        console.log(hash);
+        const new_user = new Admin({
+            name: "Vivek",
+            adminid: body.adminid,
+            password: hash,
+            isActive: true,
+            type: "main"
+        })
+        new_user.save()
+            .then((ress) => {
+                res.status(200).json({
+                    message: "User Login Success"
+                })
+            })
+            .catch((err) => {
+                console.log(err, "err");
 
-module.exports = { adminLogin, userLogin }
+                res.status(401).json({
+                    message: err
+                })
+            })
+    } catch (err) {
+        console.log(err, "err");
+        res.status(401).json({
+            message: err
+        })
+    }
+}
+
+
+module.exports = { adminLogin, userLogin, addAdmin }
 
 
 
