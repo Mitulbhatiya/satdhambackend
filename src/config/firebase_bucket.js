@@ -1,5 +1,6 @@
 const path = require("path");
 const { readFileSync, existsSync } = require("fs");
+const admin = require("firebase-admin");
 
 let bucketPromise;
 
@@ -21,7 +22,7 @@ function loadServiceAccount() {
 async function getBucket() {
     if (!bucketPromise) {
         bucketPromise = (async () => {
-            const { default: admin } = await import("firebase-admin");
+            // const { default: admin } = await import("firebase-admin");
 
             if (!admin.apps.length) {
                 const serviceAccount = loadServiceAccount();
